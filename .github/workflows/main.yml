@@ -1,0 +1,163 @@
+name: Continuous Deployment
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment to build and deploy changes
+        default: development
+        options:
+          - development
+          - staging
+          - produciton
+        type: choice
+      backend:
+        description: Backend project branch to build and deploy 
+        default: develop
+        type: string
+      frontend:
+        description: Frontend project branch to build and deploy
+        default: develop
+        type: string
+  push:
+jobs:
+  setup:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Determine and configure target environment URL to be deployed
+      run: |
+        echo "::set-output name=prefix::$(date +'%Y%m%d-%H%M%S')-${GITHUB_SHA::8}"
+        echo "::set-output name=environment::${{ inputs.environment || 'development' }}"
+        case ${{ inputs.environment || 'development' }} in
+          development)
+            echo "::set-output name=url::https://development.riverside.fm"
+            echo "::set-output name=heroku::riversidefm-development"
+          ;;
+          staging)
+            echo "::set-output name=url::https://staging.riverside.fm"
+            echo "::set-output name=heroku::riversidefm-staging"
+          ;;
+          production)
+            echo "::set-output name=url::https://riverside.fm"
+            echo "::set-output name=heroku::rsprod"
+          ;;
+          *)
+            echo "Something went wrong, ${{ inputs.environment }} environment is unknown!"
+            exit 1
+          ;;
+        esac
+      id: setup
+    outputs:
+      environment: ${{ steps.setup.outputs.environment }}
+      heroku: ${{ steps.setup.outputs.heroku }}
+      prefix: ${{ steps.setup.outputs.prefix }}
+      url: ${{ steps.setup.outputs.url }}
+  frontend:
+    env:
+      APPLICATION_BASE_DOMAIN: riverside.fm
+      STATIC_BASE_DOMAIN: app.riverside.fm
+      CI: false
+    environment:
+      name: ${{ needs.setup.outputs.environment }}-frontend
+      url: ${{ needs.setup.outputs.url }}
+    concurrency: ${{ needs.setup.outputs.environment }}
+    runs-on: ubuntu-22.04
+    needs: [setup]
+    steps:
+    - name: Fetch riversidefm/riverside.fm-webapp repository to start building
+      uses: actions/checkout@v3
+      with:
+        repository: riversidefm/riverside.fm-webapp
+        ref: ${{ inputs.frontend || 'develop' }}
+        token: ${{ secrets.PAT }}
+    - name: Dynamically configure required environment variables
+      run: |
+        case ${{ needs.setup.outputs.environment }} in
+          development)
+            echo "BUCKET_PATH=${{ needs.setup.outputs.environment }}.${{ env.STATIC_BASE_DOMAIN }}/${{ needs.setup.outputs.prefix }}" >> $GITHUB_ENV
+            echo "NODE_ENV=development" >> $GITHUB_ENV
+          ;;
+          staging)
+            echo "BUCKET_PATH=${{ needs.setup.outputs.environment }}.${{ env.STATIC_BASE_DOMAIN }}/${{ needs.setup.outputs.prefix }}" >> $GITHUB_ENV
+            echo "NODE_ENV=development" >> $GITHUB_ENV
+          ;;
+          production)
+            echo "BUCKET_PATH=${{ env.STATIC_BASE_DOMAIN }}/${{ needs.setup.outputs.prefix }}" >> $GITHUB_ENV
+            echo "NODE_ENV=production" >> $GITHUB_ENV
+          ;;
+          *)
+            echo "${{ needs.setup.outputs.environment }} environment is unknown!"
+            exit 1
+          ;;
+        esac
+    - name: Dynamically configure application public URL based on environment
+      run: echo "PUBLIC_URL=https://${{ env.BUCKET_PATH }}" >> $GITHUB_ENV
+
+    - name: Dynamically configure required React application environment variables
+      run: |
+        case ${{ needs.setup.outputs.environment }} in
+          development)
+            echo "REACT_APP_API_BASE_URL=https://${{ needs.setup.outputs.environment }}.${{ env.APPLICATION_BASE_DOMAIN }}" >> $GITHUB_ENV
+            echo "REACT_APP_APPLICATION_URL=https://${{ needs.setup.outputs.environment }}.${{ env.APPLICATION_BASE_DOMAIN }}" >> $GITHUB_ENV
+            echo "REACT_APP_S3_BASE_URL=https://riversidefm.s3.amazonaws.com/" >> $GITHUB_ENV
+            echo "REACT_APP_WEBSITE_URL=https://${{ needs.setup.outputs.environment }}.${{ env.APPLICATION_BASE_DOMAIN }}" >> $GITHUB_ENV
+          ;;
+          staging)
+            echo "GENERATE_SOURCEMAP=false" >> $GITHUB_ENV
+            echo "REACT_APP_API_BASE_URL=https://${{ needs.setup.outputs.environment }}.${{ env.APPLICATION_BASE_DOMAIN }}" >> $GITHUB_ENV
+            echo "REACT_APP_APPLICATION_URL=https://${{ needs.setup.outputs.environment }}.${{ env.APPLICATION_BASE_DOMAIN }}" >> $GITHUB_ENV
+            echo "REACT_APP_LOGROCKET_ID=ine8hr/riversidefm" >> $GITHUB_ENV
+            echo "REACT_APP_S3_BASE_URL=https://riversidefm.s3.amazonaws.com/" >> $GITHUB_ENV
+            echo "REACT_APP_WEBSITE_URL=https://${{ needs.setup.outputs.environment }}.${{ env.APPLICATION_BASE_DOMAIN }}" >> $GITHUB_ENV
+          ;;
+          production)
+            echo "GENERATE_SOURCEMAP=false" >> $GITHUB_ENV
+            echo "REACT_APP_API_BASE_URL=https://${{ env.APPLICATION_BASE_DOMAIN }}" >> $GITHUB_ENV
+            echo "REACT_APP_APPLICATION_URL=https://${{ env.APPLICATION_BASE_DOMAIN }}" >> $GITHUB_ENV
+            echo "REACT_APP_S3_BASE_URL=https://riversidefm.s3.amazonaws.com/" >> $GITHUB_ENV
+            echo "REACT_APP_WEBSITE_URL=https://${{ env.APPLICATION_BASE_DOMAIN }}" >> $GITHUB_ENV
+          ;;
+          *)
+            echo "${{ needs.setup.outputs.environment }} environment is unknown!"
+            exit 1
+          ;;
+        esac
+        echo "REACT_APP_APP_VERSION=2.0" >> $GITHUB_ENV
+        echo "REACT_APP_ENV=${{ needs.setup.outputs.environment }}" >> $GITHUB_ENV
+        echo "REACT_APP_GTM_ID=GTM-NDH4PM5" >> $GITHUB_ENV
+        echo "REACT_APP_HUBSPOT_FORM_ID=f8005043-67d7-4e7c-91c0-f2e597b66e3c" >> $GITHUB_ENV
+        echo "REACT_APP_HUBSPOT_PORTAL_ID=9154210" >> $GITHUB_ENV
+        echo "REACT_APP_HUBSPOT_REGION=na1" >> $GITHUB_ENV
+        echo "REACT_APP_INTERCOM_APP_ID=nei6yn42" >> $GITHUB_ENV
+        echo "REACT_APP_LD_CLIENT_ID=6084fe739151340be39d32c0" >> $GITHUB_ENV
+        echo "REACT_APP_PROFITWELL_PUBLIC_TOKEN=682cdd7646aa12e68eb6043252bccae3" >> $GITHUB_ENV
+        echo "REACT_APP_PUBLIC_URL=${{ env.PUBLIC_URL }}" >> $GITHUB_ENV
+        echo "REACT_APP_RE_CAPCHA_SITE_KEY=6LfwBZ0aAAAAAH4YsyvZNQzwXY_-cXudwf8Xrt6I" >> $GITHUB_ENV
+        echo "REACT_APP_REWARDFUL_API_KEY=16d916" >> $GITHUB_ENV
+        echo "REACT_APP_SEGMENT_KEY=Mz7KbqAHxXRRr3iflbW3tuSRnWkOyS2d" >> $GITHUB_ENV
+        echo "REACT_APP_ZENDESK_KEY=129a4ebe-f72b-4424-9082-93315a070e0d" >> $GITHUB_ENV
+    - name: Setup and configure Node.js environment
+      uses: actions/setup-node@v2
+      with:
+        node-version: 14
+        cache: yarn
+    - name: Use caching to save some time on dependencies installation
+      uses: actions/cache@v3
+      with:
+        path: node_modules
+        key: ${{ needs.setup.outputs.environment }}-${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+      id: node_modules
+    - name: Install Node.js application ${{ env.NODE_ENV }} dependencies
+      run: yarn install --frozen-lockfile
+    - name: Build Node.js application from sources
+      run: yarn build
+    - name: Compress static build artifacts using Gzip compression
+      run: find ./build \( -iname '*.html' -o -iname '*.htm' -o -iname '*.css' -o -iname '*.js' -o -iname '*.txt' -o -iname '*.map' \) -exec gzip -9 -n {} \; -exec mv {}.gz {} \;
+  backend:
+    environment:
+      name: ${{ needs.setup.outputs.environment }}-backend
+      url: https://${{ needs.setup.outputs.heroku }}.herokuapp.com/
+    concurrency: ${{ needs.setup.outputs.environment }}
+    runs-on: ubuntu-22.04
+    needs: [setup]
+    steps:
+      - run: echo Success
